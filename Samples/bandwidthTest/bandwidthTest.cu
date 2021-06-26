@@ -661,13 +661,17 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
       sprintf(strbuf, "end cudaMemcpyAsync i=%d", i);
       show_time(strbuf);  
     }
-    show_time("calling cudaEventRecord(stop)");
-    checkCudaErrors(cudaEventRecord(stop, 0));
     show_time("calling cudaDeviceSyncronize");
     checkCudaErrors(cudaDeviceSynchronize());
+
+    show_time("calling cudaEventRecord(stop)");
+    checkCudaErrors(cudaEventRecord(stop, 0));
+
     show_time("calling cudaEventElapsedTime");    
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     show_time("end cudaEventElapsedTime");
+    sprintf(strbuf, "elapsedTimeinMs %lf", elapsedTimeInMs);
+    show_time(strbuf);
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
       elapsedTimeInMs = sdkGetTimerValue(&timer);
@@ -717,6 +721,8 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   float elapsedTimeInMs = 0.0f;
   float bandwidthInGBs = 0.0f;
   cudaEvent_t start, stop;
+  char strbuf[1024];
+  
   sdkCreateTimer(&timer);
   checkCudaErrors(cudaEventCreate(&start));
   checkCudaErrors(cudaEventCreate(&stop));
@@ -725,6 +731,7 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   unsigned char *h_odata = NULL;
 
   if (PINNED == memMode) {
+  show_time("begin allocating host memory(cudaHostAlloc()");
 #if CUDART_VERSION >= 2020
     // pinned memory mode - use special function to get OS-pinned memory
     checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize,
@@ -761,6 +768,7 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     h_cacheClear2[i] = (unsigned char)(0xff - (i & 0xff));
   }
 
+  show_time("begin allocating cevice memory(cudaMalloc()");
   // allocate device memory
   unsigned char *d_idata;
   checkCudaErrors(cudaMalloc((void **)&d_idata, memSize));
@@ -770,12 +778,23 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
+      sprintf(strbuf, "begin cudaMemcpyAsync i=%d", i);
+      show_time(strbuf);  
       checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata, memSize,
                                       cudaMemcpyHostToDevice, 0));
+      sprintf(strbuf, "end cudaMemcpyAsync i=%d", i);
+      show_time(strbuf);  
     }
-    checkCudaErrors(cudaEventRecord(stop, 0));
+    show_time("calling cudaDeviceSynchronize()");
     checkCudaErrors(cudaDeviceSynchronize());
+
+    show_time("calling cudaEventRecord(stop)");
+    checkCudaErrors(cudaEventRecord(stop, 0));
+    
+    show_time("calling cudaEventElapsedTime()");
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
+    sprintf(strbuf, "elapsedTimeinMs %lf", elapsedTimeInMs);
+    show_time(strbuf);    
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
       elapsedTimeInMs = sdkGetTimerValue(&timer);
