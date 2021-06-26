@@ -433,9 +433,9 @@ void show_time(char *msg)
 	struct timeval tv;
 	gettimeofday(&tv, NULL);
 	if (msg == NULL) {
-	  printf("DEBUG: show_time: %lu.%lu\n", tv.tv_sec, tv.tv_usec);
+	  printf("DEBUG: show_time: %lu.%06lu\n", tv.tv_sec, tv.tv_usec);
 	} else {
-	  printf("DEBUG: show_time: %lu.%lu / %s\n", tv.tv_sec, tv.tv_usec, msg);	  
+	  printf("DEBUG: show_time: %lu.%06lu / %s\n", tv.tv_sec, tv.tv_usec, msg);
 	}
 }
 
