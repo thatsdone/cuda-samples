@@ -428,7 +428,7 @@ void testBandwidthQuick(unsigned int size, memcpyKind kind, printMode printmode,
 // MITOH modify
 //////////////////////////////////////////////////////////////////////
 
-void show_time(char *msg)
+void show_time(const char *msg)
 {
 #ifdef DEBUG_TIMING
   struct timeval tv;
@@ -744,12 +744,10 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   show_time("begin allocating host memory(cudaHostAlloc()");
   if (PINNED == memMode) {
 #if CUDART_VERSION >= 2020
-    printf(">=2020\n");
     // pinned memory mode - use special function to get OS-pinned memory
     checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize * MEMCOPY_ITERATIONS,
                                   (wc) ? cudaHostAllocWriteCombined : 0));
 #else
-    printf("<2020\n");
     // pinned memory mode - use special function to get OS-pinned memory
     checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize));
 #endif
@@ -808,6 +806,10 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
       sprintf(strbuf, "begin cudaMemcpyAsync i=%d", i);
       show_time(strbuf);
       h_odata_ptr = h_odata + i * memSize;
+#ifdef DEBUG_REMOTE2      
+      //*h_odata_ptr = (unsigned char)(i & 0xff);
+      memset(h_odata_ptr, memSize, i & 0xff);
+#endif
       checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata_ptr, memSize,
                                       cudaMemcpyHostToDevice, 0));
       sprintf(strbuf, "end cudaMemcpyAsync i=%d", i);
