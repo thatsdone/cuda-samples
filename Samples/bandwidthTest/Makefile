@@ -300,6 +300,9 @@ endif
 endif
 
 #ALL_CCFLAGS += --threads 0
+#ALL_CCFLAGS += -g
+ALL_CCFLAGS += -DDEBUG_REMOTE
+#ALL_CCFLAGS += -DDEBUG_TIMING
 
 ifeq ($(SAMPLE_ENABLED),0)
 EXEC ?= @echo "[@]"

@@ -430,13 +430,15 @@ void testBandwidthQuick(unsigned int size, memcpyKind kind, printMode printmode,
 
 void show_time(char *msg)
 {
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	if (msg == NULL) {
-	  printf("DEBUG: show_time: %lu.%06lu\n", tv.tv_sec, tv.tv_usec);
-	} else {
-	  printf("DEBUG: show_time: %lu.%06lu / %s\n", tv.tv_sec, tv.tv_usec, msg);
-	}
+#ifdef DEBUG_TIMING
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  if (msg == NULL) {
+    printf("DEBUG: show_time: %lu.%06lu\n", tv.tv_sec, tv.tv_usec);
+  } else {
+    printf("DEBUG: show_time: %lu.%06lu / %s\n", tv.tv_sec, tv.tv_usec, msg);
+  }
+#endif
 }
 
 void testBandwidthRange(unsigned int start, unsigned int end,
@@ -635,7 +637,7 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
     h_idata[i] = (unsigned char)(i & 0xff);
   }
   show_time("end initializing host memory");  
-  
+
   // allocate device memory
   show_time("begin allocating device memory");  
   unsigned char *d_idata;
@@ -654,6 +656,16 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
     show_time("calling cudaEventRecord(start)");
     checkCudaErrors(cudaEventRecord(start, 0));
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
+
+#ifdef DEBUG_REMOTE
+  show_time("begin initializing host memory");
+  // initialize the memory
+  for (unsigned int ii = 0; ii < memSize / sizeof(unsigned char); ii++) {
+    //h_idata[ii] = (unsigned char)(ii & 0xff);
+    memset(h_odata, memSize, i & 0xff);
+  }
+  show_time("end initializing host memory");
+#endif
       sprintf(strbuf, "begin cudaMemcpyAsync i=%d", i);
       show_time(strbuf);  
       checkCudaErrors(cudaMemcpyAsync(h_odata, d_idata, memSize,
@@ -661,12 +673,10 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
       sprintf(strbuf, "end cudaMemcpyAsync i=%d", i);
       show_time(strbuf);  
     }
-    show_time("calling cudaDeviceSyncronize");
-    checkCudaErrors(cudaDeviceSynchronize());
-
     show_time("calling cudaEventRecord(stop)");
     checkCudaErrors(cudaEventRecord(stop, 0));
-
+    show_time("calling cudaDeviceSyncronize");
+    checkCudaErrors(cudaDeviceSynchronize());
     show_time("calling cudaEventElapsedTime");    
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     show_time("end cudaEventElapsedTime");
@@ -729,14 +739,17 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
 
   // allocate host memory
   unsigned char *h_odata = NULL;
+  unsigned char *h_odata_ptr = NULL;
 
-  if (PINNED == memMode) {
   show_time("begin allocating host memory(cudaHostAlloc()");
+  if (PINNED == memMode) {
 #if CUDART_VERSION >= 2020
+    printf(">=2020\n");
     // pinned memory mode - use special function to get OS-pinned memory
-    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize,
+    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize * MEMCOPY_ITERATIONS,
                                   (wc) ? cudaHostAllocWriteCombined : 0));
 #else
+    printf("<2020\n");
     // pinned memory mode - use special function to get OS-pinned memory
     checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize));
 #endif
@@ -758,17 +771,20 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     exit(EXIT_FAILURE);
   }
 
+  show_time("begin initializing host memory");
   // initialize the memory
-  for (unsigned int i = 0; i < memSize / sizeof(unsigned char); i++) {
+  for (unsigned int i = 0; i < (memSize / sizeof(unsigned char)) * MEMCOPY_ITERATIONS; i++) {
     h_odata[i] = (unsigned char)(i & 0xff);
   }
-
+  show_time("end initializing host memory");
+  
   for (unsigned int i = 0; i < CACHE_CLEAR_SIZE / sizeof(unsigned char); i++) {
     h_cacheClear1[i] = (unsigned char)(i & 0xff);
     h_cacheClear2[i] = (unsigned char)(0xff - (i & 0xff));
   }
+  show_time("end cache clear");
 
-  show_time("begin allocating cevice memory(cudaMalloc()");
+  show_time("begin allocating device memory(cudaMalloc()");
   // allocate device memory
   unsigned char *d_idata;
   checkCudaErrors(cudaMalloc((void **)&d_idata, memSize));
@@ -778,19 +794,31 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
+
+#ifdef DEBUG_REMOTE
+  show_time("begin initializing host memory");
+  // initialize the memory
+  for (unsigned int ii = 0; ii < memSize / sizeof(unsigned char); ii++) {
+    //    h_odata[ii] = (unsigned char)(ii & 0xff);
+    memset(h_odata, memSize, i & 0xff);
+  }
+  show_time("end initializing host memory");
+#endif
+
       sprintf(strbuf, "begin cudaMemcpyAsync i=%d", i);
-      show_time(strbuf);  
-      checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata, memSize,
+      show_time(strbuf);
+      h_odata_ptr = h_odata + i * memSize;
+      checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata_ptr, memSize,
                                       cudaMemcpyHostToDevice, 0));
       sprintf(strbuf, "end cudaMemcpyAsync i=%d", i);
       show_time(strbuf);  
     }
-    show_time("calling cudaDeviceSynchronize()");
-    checkCudaErrors(cudaDeviceSynchronize());
-
     show_time("calling cudaEventRecord(stop)");
     checkCudaErrors(cudaEventRecord(stop, 0));
     
+    show_time("calling cudaDeviceSynchronize()");
+    checkCudaErrors(cudaDeviceSynchronize());
+
     show_time("calling cudaEventElapsedTime()");
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     sprintf(strbuf, "elapsedTimeinMs %lf", elapsedTimeInMs);
