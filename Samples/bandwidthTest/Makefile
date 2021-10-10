@@ -325,6 +325,10 @@ endif
 endif
 
 ALL_CCFLAGS += --threads 0 --std=c++11
+# DEBUG(thatsdone)
+ALL_CCFLAGS += -DDEBUG_REUSE
+#ALL_CCFLAGS += -DDEBUG_REUSE2
+#ALL_CCFLAGS += -g
 
 ifeq ($(SAMPLE_ENABLED),0)
 EXEC ?= @echo "[@]"
