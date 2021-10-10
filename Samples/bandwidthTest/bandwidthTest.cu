@@ -91,6 +91,8 @@ const char *sMemoryMode[] = {"PINNED", "PAGEABLE", NULL};
 // if true, use CPU based timing for everything
 static bool bDontUseGPUTiming;
 
+static bool bReuseHostMemory =true;
+
 int *pArgc = NULL;
 char **pArgv = NULL;
 
@@ -304,6 +306,14 @@ int runTest(const int argc, const char **argv) {
   if (checkCmdLineFlag(argc, argv, "cputiming")) {
     bDontUseGPUTiming = true;
   }
+
+  if (checkCmdLineFlag(argc, argv, "noreusehostmem")) {
+#ifdef DEBUG_REUSE
+    printf("DEBUG(thatsdone): noreusehostmem is set.\n");
+#endif
+    bReuseHostMemory = false;
+  }
+
 
   if (!htod && !dtoh && !dtod) {
     // default:  All
@@ -627,6 +637,16 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
+
+#ifdef DEBUG_REUSE2
+      if (bReuseHostMemory)
+  // initialize the memory
+	for (unsigned int ii = 0; ii < memSize / sizeof(unsigned char); ii++) {
+	  //h_idata[ii] = (unsigned char)(ii & 0xff);
+	  memset(h_odata, memSize, ii & 0xff);
+	}
+    }
+#endif
       checkCudaErrors(cudaMemcpyAsync(h_odata, d_idata, memSize,
                                       cudaMemcpyDeviceToHost, 0));
     }
@@ -682,25 +702,33 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   float elapsedTimeInMs = 0.0f;
   float bandwidthInGBs = 0.0f;
   cudaEvent_t start, stop;
+
   sdkCreateTimer(&timer);
   checkCudaErrors(cudaEventCreate(&start));
   checkCudaErrors(cudaEventCreate(&stop));
 
   // allocate host memory
   unsigned char *h_odata = NULL;
+  unsigned char *h_odata_ptr = NULL;
+
+  unsigned int memFactor = 1;
+
+  if (!bReuseHostMemory) {
+    memFactor = MEMCOPY_ITERATIONS;
+  }
 
   if (PINNED == memMode) {
 #if CUDART_VERSION >= 2020
     // pinned memory mode - use special function to get OS-pinned memory
-    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize,
+    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize * memFactor,
                                   (wc) ? cudaHostAllocWriteCombined : 0));
 #else
     // pinned memory mode - use special function to get OS-pinned memory
-    checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize));
+    checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize * memFactor));
 #endif
   } else {
     // pageable memory mode - use malloc
-    h_odata = (unsigned char *)malloc(memSize);
+    h_odata = (unsigned char *)malloc(memSize * memFactor);
 
     if (h_odata == 0) {
       fprintf(stderr, "Not enough memory available on host to run test!\n");
@@ -717,7 +745,7 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   }
 
   // initialize the memory
-  for (unsigned int i = 0; i < memSize / sizeof(unsigned char); i++) {
+  for (unsigned int i = 0; i < (memSize / sizeof(unsigned char)) * memFactor; i++) {
     h_odata[i] = (unsigned char)(i & 0xff);
   }
 
@@ -734,8 +762,28 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   if (PINNED == memMode) {
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
+    h_odata_ptr = h_odata;
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
-      checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata, memSize,
+      if (!bReuseHostMemory) {
+        h_odata_ptr = h_odata + i * memSize;
+      }
+#ifdef DEBUG_REUSE2
+      // touch the host memory on the fly
+      /*
+      case1) set byte-by-byte via loop
+      for (unsigned int ii = 0; ii < memSize / sizeof(unsigned char); ii++) {
+        h_odata[ii] = (unsigned char)(ii & 0xff);
+      }
+      //case2) set one time using memset
+      //memset(h_odata_ptr, memSize, i & 0xff);
+      //case3) set the first byte only
+      //*h_odata_ptr = (unsigned char)(i & 0xff);
+      */
+#endif
+#ifdef DEBUG_REUSE
+      printf("DEBUG(thatsdone): calling cudaMemcpyAsync(): i=%d / %p / %u\n", i, h_odata_ptr, memSize);
+#endif
+      checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata_ptr, memSize,
                                       cudaMemcpyHostToDevice, 0));
     }
     checkCudaErrors(cudaEventRecord(stop, 0));
