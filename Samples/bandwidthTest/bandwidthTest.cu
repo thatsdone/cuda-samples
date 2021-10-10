@@ -637,16 +637,6 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
-
-#ifdef DEBUG_REUSE2
-      if (bReuseHostMemory)
-  // initialize the memory
-	for (unsigned int ii = 0; ii < memSize / sizeof(unsigned char); ii++) {
-	  //h_idata[ii] = (unsigned char)(ii & 0xff);
-	  memset(h_odata, memSize, ii & 0xff);
-	}
-    }
-#endif
       checkCudaErrors(cudaMemcpyAsync(h_odata, d_idata, memSize,
                                       cudaMemcpyDeviceToHost, 0));
     }
