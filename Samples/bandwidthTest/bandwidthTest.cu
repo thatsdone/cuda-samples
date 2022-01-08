@@ -125,6 +125,31 @@ void printResultsCSV(unsigned int *memSizes, double *bandwidths,
                      int iNumDevs, bool wc);
 void printHelp(void);
 
+#ifdef DEBUG_REUSE
+long get_timestamp()
+{
+  struct timeval tv;
+  long ts;
+  gettimeofday(&tv, NULL);
+  ts = tv.tv_sec * 1000 * 1000 + tv.tv_usec;
+#ifdef DEBUG_TIMING
+  printf("get_timestamp: %ld\n", ts);
+#endif
+  return ts;
+}
+
+void show_timestamp(const char *msg)
+{
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  if (msg == NULL) {
+    printf("DEBUG: show_time: %lu.%06lu\n", tv.tv_sec, tv.tv_usec);
+  } else {
+    printf("DEBUG: show_time: %lu.%06lu / %s\n", tv.tv_sec, tv.tv_usec, msg);
+  }
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
 ////////////////////////////////////////////////////////////////////////////////
@@ -595,6 +620,9 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
 
   unsigned int memFactor = 1;
 
+#ifdef DEBUG_REUSE
+  long ts1, ts2;
+#endif
   if (!bReuseHostMemory) {
     memFactor = MEMCOPY_ITERATIONS;
   }
@@ -627,9 +655,16 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
   }
 
   // initialize the memory
+#ifdef DEBUG_REUSE
+  ts1 = get_timestamp();
+#endif
   for (unsigned int i = 0; i < memSize / sizeof(unsigned char); i++) {
     h_idata[i] = (unsigned char)(i & 0xff);
   }
+#ifdef DEBUG_REUSE
+  ts2 = get_timestamp();
+  printf("DEBUG(thatsdone): host memory initialization: %ld (us)\n", (ts2 - ts1));
+#endif
 
   // allocate device memory
   unsigned char *d_idata;
@@ -649,13 +684,25 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
         h_odata_ptr = h_odata + i * memSize;
       }
 #ifdef DEBUG_REUSE
-      printf("DEBUG: calling cudaMemcpyAsync(): i=%d / %p / %u\n", i, h_odata_ptr, memSize);
+      //printf("DEBUG: calling cudaMemcpyAsync(): i=%d / %p / %u\n", i, h_odata_ptr, memSize);
+      ts1 = get_timestamp();
 #endif
       checkCudaErrors(cudaMemcpyAsync(h_odata_ptr, d_idata, memSize,
                                       cudaMemcpyDeviceToHost, 0));
+#ifdef DEBUG_REUSE
+      ts2 = get_timestamp();
+      printf("DEBUG: calling cudaMemcpyAsync(): i=%d / %p / %u / %ld (us)\n", i, h_odata_ptr, memSize, (ts2 - ts1));
+#endif
     }
     checkCudaErrors(cudaEventRecord(stop, 0));
+#ifdef DEBUG_REUSE
+    ts1 = get_timestamp();
+#endif
     checkCudaErrors(cudaDeviceSynchronize());
+#ifdef DEBUG_REUSE
+    ts2 = get_timestamp();
+    printf("DEBUG(thatsdone): cudaDeviceSynchronize(): %ld (us)\n", (ts2 - ts1));
+#endif
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
@@ -707,6 +754,9 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   float bandwidthInGBs = 0.0f;
   cudaEvent_t start, stop;
 
+#ifdef DEBUG_REUSE
+  long ts1, ts2;
+#endif
   sdkCreateTimer(&timer);
   checkCudaErrors(cudaEventCreate(&start));
   checkCudaErrors(cudaEventCreate(&stop));
@@ -721,6 +771,9 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     memFactor = MEMCOPY_ITERATIONS;
   }
 
+#ifdef DEBUG_REUSE
+  ts1 = get_timestamp();
+#endif
   if (PINNED == memMode) {
 #if CUDART_VERSION >= 2020
     // pinned memory mode - use special function to get OS-pinned memory
@@ -739,6 +792,10 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
       exit(EXIT_FAILURE);
     }
   }
+#ifdef DEBUG_REUSE
+  ts2 = get_timestamp();
+  printf("DEBUG(thatsdone): host memory allocation: %ld (us)\n", (ts2 - ts1));
+#endif
 
   unsigned char *h_cacheClear1 = (unsigned char *)malloc(CACHE_CLEAR_SIZE);
   unsigned char *h_cacheClear2 = (unsigned char *)malloc(CACHE_CLEAR_SIZE);
@@ -749,6 +806,9 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   }
 
   // initialize the memory
+#ifdef DEBUG_REUSE
+  ts1 = get_timestamp();
+#endif
   for (unsigned int i = 0; i < (memSize / sizeof(unsigned char)) * memFactor; i++) {
     h_odata[i] = (unsigned char)(i & 0xff);
   }
@@ -757,6 +817,10 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     h_cacheClear1[i] = (unsigned char)(i & 0xff);
     h_cacheClear2[i] = (unsigned char)(0xff - (i & 0xff));
   }
+#ifdef DEBUG_REUSE
+  ts2 = get_timestamp();
+  printf("DEBUG(thatsdone): host memory initialization: %ld (us)\n", (ts2 - ts1));
+#endif
 
   // allocate device memory
   unsigned char *d_idata;
@@ -785,13 +849,22 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
       */
 #endif
 #ifdef DEBUG_REUSE
-      printf("DEBUG(thatsdone): calling cudaMemcpyAsync(): i=%d / %p / %u\n", i, h_odata_ptr, memSize);
-#endif
+      ts1 = get_timestamp();
       checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata_ptr, memSize,
                                       cudaMemcpyHostToDevice, 0));
+      ts2 = get_timestamp();
+      printf("DEBUG(thatsdone): cudaMemcpyAsync(): i=%d / %p / %u / %ld (us)\n", i, h_odata_ptr, memSize, (ts2 - ts1));
+#endif
     }
     checkCudaErrors(cudaEventRecord(stop, 0));
+#ifdef DEBUG_REUSE
+    ts1 = get_timestamp();
+#endif
     checkCudaErrors(cudaDeviceSynchronize());
+#ifdef DEBUG_REUSE
+    ts2 = get_timestamp();
+    printf("DEBUG(thatsdone): cudaDeviceSynchronize(): %ld (us)\n", (ts2 - ts1));
+#endif
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
