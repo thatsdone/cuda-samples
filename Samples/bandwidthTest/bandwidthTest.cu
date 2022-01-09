@@ -703,6 +703,20 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
     ts2 = get_timestamp();
     printf("DEBUG(thatsdone): cudaDeviceSynchronize(): %ld (us)\n", (ts2 - ts1));
 #endif
+#ifdef DEBUG_REUSE
+    h_odata_ptr = h_odata;
+    for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
+      unsigned char tuc;
+      if (!bReuseHostMemory) {
+        h_odata_ptr = h_odata + i * memSize;
+      }
+      ts1 = get_timestamp();
+      tuc = *h_odata_ptr;
+      ts2 = get_timestamp();
+      printf("DEBUG(thatsdone): read %d th buffer 1byte: %ld (us)\n", i, (ts2 - ts1));
+    }
+#endif
+
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
