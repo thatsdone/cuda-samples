@@ -91,6 +91,8 @@ const char *sMemoryMode[] = {"PINNED", "PAGEABLE", NULL};
 // if true, use CPU based timing for everything
 static bool bDontUseGPUTiming;
 
+static bool bReuseHostMemory =true;
+
 int *pArgc = NULL;
 char **pArgv = NULL;
 
@@ -122,6 +124,31 @@ void printResultsCSV(unsigned int *memSizes, double *bandwidths,
                      unsigned int count, memcpyKind kind, memoryMode memMode,
                      int iNumDevs, bool wc);
 void printHelp(void);
+
+#ifdef DEBUG_REUSE
+long get_timestamp()
+{
+  struct timeval tv;
+  long ts;
+  gettimeofday(&tv, NULL);
+  ts = tv.tv_sec * 1000 * 1000 + tv.tv_usec;
+#ifdef DEBUG_TIMING
+  printf("get_timestamp: %ld\n", ts);
+#endif
+  return ts;
+}
+
+void show_timestamp(const char *msg)
+{
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  if (msg == NULL) {
+    printf("DEBUG: show_time: %lu.%06lu\n", tv.tv_sec, tv.tv_usec);
+  } else {
+    printf("DEBUG: show_time: %lu.%06lu / %s\n", tv.tv_sec, tv.tv_usec, msg);
+  }
+}
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
@@ -304,6 +331,14 @@ int runTest(const int argc, const char **argv) {
   if (checkCmdLineFlag(argc, argv, "cputiming")) {
     bDontUseGPUTiming = true;
   }
+
+  if (checkCmdLineFlag(argc, argv, "noreusehostmem")) {
+#ifdef DEBUG_REUSE
+    printf("DEBUG(thatsdone): noreusehostmem is set.\n");
+#endif
+    bReuseHostMemory = false;
+  }
+
 
   if (!htod && !dtoh && !dtod) {
     // default:  All
@@ -580,7 +615,17 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
   float bandwidthInGBs = 0.0f;
   unsigned char *h_idata = NULL;
   unsigned char *h_odata = NULL;
+  unsigned char *h_odata_ptr = NULL;
   cudaEvent_t start, stop;
+
+  unsigned int memFactor = 1;
+
+#ifdef DEBUG_REUSE
+  long ts1, ts2;
+#endif
+  if (!bReuseHostMemory) {
+    memFactor = MEMCOPY_ITERATIONS;
+  }
 
   sdkCreateTimer(&timer);
   checkCudaErrors(cudaEventCreate(&start));
@@ -592,16 +637,16 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
 #if CUDART_VERSION >= 2020
     checkCudaErrors(cudaHostAlloc((void **)&h_idata, memSize,
                                   (wc) ? cudaHostAllocWriteCombined : 0));
-    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize,
+    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize * memFactor,
                                   (wc) ? cudaHostAllocWriteCombined : 0));
 #else
     checkCudaErrors(cudaMallocHost((void **)&h_idata, memSize));
-    checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize));
+    checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize * memFactor));
 #endif
   } else {
     // pageable memory mode - use malloc
     h_idata = (unsigned char *)malloc(memSize);
-    h_odata = (unsigned char *)malloc(memSize);
+    h_odata = (unsigned char *)malloc(memSize * memFactor);
 
     if (h_idata == 0 || h_odata == 0) {
       fprintf(stderr, "Not enough memory avaialable on host to run test!\n");
@@ -610,9 +655,16 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
   }
 
   // initialize the memory
+#ifdef DEBUG_REUSE
+  ts1 = get_timestamp();
+#endif
   for (unsigned int i = 0; i < memSize / sizeof(unsigned char); i++) {
     h_idata[i] = (unsigned char)(i & 0xff);
   }
+#ifdef DEBUG_REUSE
+  ts2 = get_timestamp();
+  printf("DEBUG(thatsdone): host memory initialization: %ld (us)\n", (ts2 - ts1));
+#endif
 
   // allocate device memory
   unsigned char *d_idata;
@@ -626,12 +678,45 @@ float testDeviceToHostTransfer(unsigned int memSize, memoryMode memMode,
   if (PINNED == memMode) {
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
+    h_odata_ptr = h_odata;
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
-      checkCudaErrors(cudaMemcpyAsync(h_odata, d_idata, memSize,
+      if (!bReuseHostMemory) {
+        h_odata_ptr = h_odata + i * memSize;
+      }
+#ifdef DEBUG_REUSE
+      //printf("DEBUG: calling cudaMemcpyAsync(): i=%d / %p / %u\n", i, h_odata_ptr, memSize);
+      ts1 = get_timestamp();
+#endif
+      checkCudaErrors(cudaMemcpyAsync(h_odata_ptr, d_idata, memSize,
                                       cudaMemcpyDeviceToHost, 0));
+#ifdef DEBUG_REUSE
+      ts2 = get_timestamp();
+      printf("DEBUG: calling cudaMemcpyAsync(): i=%d / %p / %u / %ld (us)\n", i, h_odata_ptr, memSize, (ts2 - ts1));
+#endif
     }
     checkCudaErrors(cudaEventRecord(stop, 0));
+#ifdef DEBUG_REUSE
+    ts1 = get_timestamp();
+#endif
     checkCudaErrors(cudaDeviceSynchronize());
+#ifdef DEBUG_REUSE
+    ts2 = get_timestamp();
+    printf("DEBUG(thatsdone): cudaDeviceSynchronize(): %ld (us)\n", (ts2 - ts1));
+#endif
+#ifdef DEBUG_REUSE
+    h_odata_ptr = h_odata;
+    for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
+      unsigned char tuc;
+      if (!bReuseHostMemory) {
+        h_odata_ptr = h_odata + i * memSize;
+      }
+      ts1 = get_timestamp();
+      tuc = *h_odata_ptr;
+      ts2 = get_timestamp();
+      printf("DEBUG(thatsdone): read %d th buffer 1byte: %ld (us)\n", i, (ts2 - ts1));
+    }
+#endif
+
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
@@ -682,31 +767,49 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   float elapsedTimeInMs = 0.0f;
   float bandwidthInGBs = 0.0f;
   cudaEvent_t start, stop;
+
+#ifdef DEBUG_REUSE
+  long ts1, ts2;
+#endif
   sdkCreateTimer(&timer);
   checkCudaErrors(cudaEventCreate(&start));
   checkCudaErrors(cudaEventCreate(&stop));
 
   // allocate host memory
   unsigned char *h_odata = NULL;
+  unsigned char *h_odata_ptr = NULL;
 
+  unsigned int memFactor = 1;
+
+  if (!bReuseHostMemory) {
+    memFactor = MEMCOPY_ITERATIONS;
+  }
+
+#ifdef DEBUG_REUSE
+  ts1 = get_timestamp();
+#endif
   if (PINNED == memMode) {
 #if CUDART_VERSION >= 2020
     // pinned memory mode - use special function to get OS-pinned memory
-    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize,
+    checkCudaErrors(cudaHostAlloc((void **)&h_odata, memSize * memFactor,
                                   (wc) ? cudaHostAllocWriteCombined : 0));
 #else
     // pinned memory mode - use special function to get OS-pinned memory
-    checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize));
+    checkCudaErrors(cudaMallocHost((void **)&h_odata, memSize * memFactor));
 #endif
   } else {
     // pageable memory mode - use malloc
-    h_odata = (unsigned char *)malloc(memSize);
+    h_odata = (unsigned char *)malloc(memSize * memFactor);
 
     if (h_odata == 0) {
       fprintf(stderr, "Not enough memory available on host to run test!\n");
       exit(EXIT_FAILURE);
     }
   }
+#ifdef DEBUG_REUSE
+  ts2 = get_timestamp();
+  printf("DEBUG(thatsdone): host memory allocation: %ld (us)\n", (ts2 - ts1));
+#endif
 
   unsigned char *h_cacheClear1 = (unsigned char *)malloc(CACHE_CLEAR_SIZE);
   unsigned char *h_cacheClear2 = (unsigned char *)malloc(CACHE_CLEAR_SIZE);
@@ -717,7 +820,10 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   }
 
   // initialize the memory
-  for (unsigned int i = 0; i < memSize / sizeof(unsigned char); i++) {
+#ifdef DEBUG_REUSE
+  ts1 = get_timestamp();
+#endif
+  for (unsigned int i = 0; i < (memSize / sizeof(unsigned char)) * memFactor; i++) {
     h_odata[i] = (unsigned char)(i & 0xff);
   }
 
@@ -725,6 +831,10 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
     h_cacheClear1[i] = (unsigned char)(i & 0xff);
     h_cacheClear2[i] = (unsigned char)(0xff - (i & 0xff));
   }
+#ifdef DEBUG_REUSE
+  ts2 = get_timestamp();
+  printf("DEBUG(thatsdone): host memory initialization: %ld (us)\n", (ts2 - ts1));
+#endif
 
   // allocate device memory
   unsigned char *d_idata;
@@ -734,12 +844,41 @@ float testHostToDeviceTransfer(unsigned int memSize, memoryMode memMode,
   if (PINNED == memMode) {
     if (bDontUseGPUTiming) sdkStartTimer(&timer);
     checkCudaErrors(cudaEventRecord(start, 0));
+    h_odata_ptr = h_odata;
     for (unsigned int i = 0; i < MEMCOPY_ITERATIONS; i++) {
-      checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata, memSize,
+      if (!bReuseHostMemory) {
+        h_odata_ptr = h_odata + i * memSize;
+      }
+#ifdef DEBUG_REUSE2
+      // touch the host memory on the fly
+      /*
+      case1) set byte-by-byte via loop
+      for (unsigned int ii = 0; ii < memSize / sizeof(unsigned char); ii++) {
+        h_odata[ii] = (unsigned char)(ii & 0xff);
+      }
+      //case2) set one time using memset
+      //memset(h_odata_ptr, memSize, i & 0xff);
+      //case3) set the first byte only
+      //*h_odata_ptr = (unsigned char)(i & 0xff);
+      */
+#endif
+#ifdef DEBUG_REUSE
+      ts1 = get_timestamp();
+      checkCudaErrors(cudaMemcpyAsync(d_idata, h_odata_ptr, memSize,
                                       cudaMemcpyHostToDevice, 0));
+      ts2 = get_timestamp();
+      printf("DEBUG(thatsdone): cudaMemcpyAsync(): i=%d / %p / %u / %ld (us)\n", i, h_odata_ptr, memSize, (ts2 - ts1));
+#endif
     }
     checkCudaErrors(cudaEventRecord(stop, 0));
+#ifdef DEBUG_REUSE
+    ts1 = get_timestamp();
+#endif
     checkCudaErrors(cudaDeviceSynchronize());
+#ifdef DEBUG_REUSE
+    ts2 = get_timestamp();
+    printf("DEBUG(thatsdone): cudaDeviceSynchronize(): %ld (us)\n", (ts2 - ts1));
+#endif
     checkCudaErrors(cudaEventElapsedTime(&elapsedTimeInMs, start, stop));
     if (bDontUseGPUTiming) {
       sdkStopTimer(&timer);
